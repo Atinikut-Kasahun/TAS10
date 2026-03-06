@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class JobRequisition extends Model
@@ -43,5 +44,13 @@ class JobRequisition extends Model
     public function approvedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    /**
+     * The job posting created when TA team publishes this requisition.
+     */
+    public function jobPosting(): HasOne
+    {
+        return $this->hasOne(JobPosting::class, 'job_requisition_id');
     }
 }

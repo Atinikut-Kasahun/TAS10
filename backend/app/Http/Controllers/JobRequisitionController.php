@@ -14,7 +14,7 @@ class JobRequisitionController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = JobRequisition::with(['requester', 'approvedBy', 'tenant']);
+        $query = JobRequisition::with(['requester', 'approvedBy', 'tenant', 'jobPosting']);
 
         // Tenant Isolation (except Global Admin and HR Manager)
         if (!$user->hasRole('admin') && !$user->hasRole('hr_manager')) {
@@ -201,5 +201,58 @@ class JobRequisitionController extends Controller
         ]);
 
         return response()->json($requisition);
+    }
+
+    /**
+     * Securely serve the JD document.
+     */
+    public function downloadJd(string $id, Request $request)
+    {
+        $requisition = JobRequisition::findOrFail($id);
+
+        // Security Check: Ensure user belongs to the same tenant or is global admin
+        $user = $request->user();
+
+        if ($user && !$user->hasRole('admin') && $requisition->tenant_id !== $user->tenant_id) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        if (!$requisition->jd_path) {
+            return response()->json(['error' => 'No JD document attached to this requisition.'], 404);
+        }
+
+        // Use Laravel Storage facade for reliable cross-platform path resolution
+        $disk = \Illuminate\Support\Facades\Storage::disk('public');
+
+        if (!$disk->exists($requisition->jd_path)) {
+            return response()->json([
+                'error' => 'File not found on server.',
+                'path' => $requisition->jd_path,
+            ], 404);
+        }
+
+        $fullPath = $disk->path($requisition->jd_path);
+        $extension = strtolower(pathinfo($requisition->jd_path, PATHINFO_EXTENSION));
+        $originalName = basename($requisition->jd_path);
+
+        // Determine MIME type and disposition
+        $mimeMap = [
+            'pdf' => 'application/pdf',
+            'doc' => 'application/msword',
+            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ];
+
+        $contentType = $mimeMap[$extension] ?? 'application/octet-stream';
+
+        // PDFs open inline in the browser; Word docs must be downloaded
+        $disposition = ($extension === 'pdf') ? 'inline' : 'attachment';
+
+        // Clean filename for the Content-Disposition header (remove non-ASCII chars)
+        $safeFilename = 'JD_REQ' . $requisition->id . '.' . $extension;
+
+        return response()->file($fullPath, [
+            'Content-Type' => $contentType,
+            'Content-Disposition' => $disposition . '; filename="' . $safeFilename . '"',
+        ]);
     }
 }

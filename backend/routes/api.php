@@ -22,6 +22,7 @@ Route::middleware('mock.auth')->group(function () {
         Route::middleware('tenant.scope')->group(function () {
             Route::get('/dashboard', [\App\Http\Controllers\DashboardController::class, 'index']);
             Route::get('/requisitions', [\App\Http\Controllers\JobRequisitionController::class, 'index']);
+            Route::get('/requisitions/{id}/jd', [\App\Http\Controllers\JobRequisitionController::class, 'downloadJd']);
             Route::post('/requisitions', [\App\Http\Controllers\JobRequisitionController::class, 'store']);
             Route::post('/requisitions/bulk-approve', [\App\Http\Controllers\JobRequisitionController::class, 'bulkApprove']);
             Route::post('/requisitions/{id}/duplicate', [\App\Http\Controllers\JobRequisitionController::class, 'duplicate']);
@@ -35,6 +36,7 @@ Route::middleware('mock.auth')->group(function () {
             Route::get('/applicants/export', [\App\Http\Controllers\ApplicantController::class, 'export']);
             Route::get('/applicants/stats', [\App\Http\Controllers\ApplicantController::class, 'stats']);
             Route::get('/applicants', [\App\Http\Controllers\ApplicantController::class, 'index']);
+            Route::post('/applicants', [\App\Http\Controllers\ApplicantController::class, 'store']);
             Route::patch('/applicants/{id}/status', [\App\Http\Controllers\ApplicantController::class, 'updateStatus']);
             Route::post('/applicants/{id}/mention', [\App\Http\Controllers\ApplicantController::class, 'mention']);
 
@@ -55,6 +57,11 @@ Route::middleware('mock.auth')->group(function () {
             Route::get('/users', [\App\Http\Controllers\MessageController::class, 'users']);
             Route::post('/messages/send', [\App\Http\Controllers\MessageController::class, 'send']);
             Route::get('/team-users', [\App\Http\Controllers\UserController::class, 'index']); // New management route
+
+            // Employee Management & Turnover Tracking
+            Route::get('/employees', [\App\Http\Controllers\EmployeeController::class, 'index']);
+            Route::patch('/employees/{id}/status', [\App\Http\Controllers\EmployeeController::class, 'updateStatus']);
+            Route::get('/employees/turnover', [\App\Http\Controllers\EmployeeController::class, 'turnoverData']);
         });
 
         // ─────────────────────────────────────────────────────────

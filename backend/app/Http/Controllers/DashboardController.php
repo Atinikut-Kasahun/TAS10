@@ -128,6 +128,15 @@ class DashboardController extends Controller
                 return $app->created_at->diffInDays($app->updated_at);
             })->average()) : 0;
 
+            $employeesPastCount = \App\Models\User::where('tenant_id', $tenantId)->where('created_at', '<', $thirtyDaysAgo)->count();
+            $employeesTrend = $employeesPastCount > 0 ? round((($employeesCount - $employeesPastCount) / $employeesPastCount) * 100, 1) : ($employeesCount > 0 ? 100 : 0);
+
+            $separationsCount = \App\Models\User::where('tenant_id', $tenantId)
+                ->whereIn('employment_status', ['resigned', 'terminated'])
+                ->where('separation_date', '>=', $thirtyDaysAgo)
+                ->count();
+            $retentionRate = $employeesCount > 0 ? round((($employeesCount - $separationsCount) / $employeesCount) * 100, 1) : 100;
+
             $sources = \App\Models\Applicant::where('tenant_id', $tenantId)
                 ->select('source', DB::raw('count(*) as count'))
                 ->groupBy('source')
@@ -145,6 +154,9 @@ class DashboardController extends Controller
                 'total_candidates_trend' => $candidatesTrend,
                 'total_candidates_label' => 'vs last month',
                 'total_employees' => $employeesCount,
+                'total_employees_trend' => $employeesTrend,
+                'total_employees_label' => 'vs last month',
+                'retention_rate' => $retentionRate,
                 'new_applications_today' => $newTodayCount,
                 'new_applications_today_trend' => $newTodayTrend,
                 'new_applications_today_label' => 'vs yesterday',

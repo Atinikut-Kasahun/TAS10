@@ -19,6 +19,7 @@ interface Requisition {
     created_at: string;
     requester?: { id: number; name: string; email: string };
     tenant?: { name: string };
+    job_posting?: { created_at: string; title: string; id: number };
 }
 
 export default function HRManagerDashboard({ user, activeTab: initialTab, onLogout }: { user: any; activeTab: string; onLogout: () => void }) {
@@ -228,14 +229,14 @@ export default function HRManagerDashboard({ user, activeTab: initialTab, onLogo
                                             className="accent-[#1F7A6E] rounded"
                                         />
                                     </th>
-                                    {['REQUISITION', 'COMPANY', 'HIRING MANAGER', 'LOCATION', 'SALARY', 'PLAN DATE', 'STATUS'].map(h => (
+                                    {['REQUISITION', 'COMPANY', 'HIRING MANAGER', 'LOCATION', 'SALARY', 'SUBMITTED ON', 'POSTED TO PORTAL', 'STATUS'].map(h => (
                                         <th key={h} className="px-6 py-4 text-[11px] font-black text-gray-400 uppercase tracking-widest">{h}</th>
                                     ))}
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-50">
                                 {requisitions.length === 0 ? (
-                                    <tr><td colSpan={7} className="px-8 py-20 text-center text-gray-400 italic text-sm">No requisitions in the plan.</td></tr>
+                                    <tr><td colSpan={9} className="px-8 py-20 text-center text-gray-400 italic text-sm">No requisitions in the plan.</td></tr>
                                 ) : requisitions.map((req) => (
                                     <tr key={req.id} className="hover:bg-gray-50 transition-colors group cursor-pointer">
                                         <td className="pl-6 py-6" onClick={(e) => e.stopPropagation()}>
@@ -270,8 +271,39 @@ export default function HRManagerDashboard({ user, activeTab: initialTab, onLogo
                                         <td className="px-6 py-6 text-[13px] text-[#1A2B3D] font-black">
                                             {req.budget ? req.budget.toLocaleString() : '15,000'} ETB /mo
                                         </td>
-                                        <td className="px-6 py-6 text-[13px] text-gray-600">
-                                            {new Date(req.created_at).toLocaleDateString()}
+                                        <td className="px-6 py-6">
+                                            {req.created_at ? (() => {
+                                                const d = new Date(req.created_at);
+                                                return (
+                                                    <div>
+                                                        <p className="text-[12px] font-bold text-[#1A2B3D]">
+                                                            {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                        </p>
+                                                        <p className="text-[11px] text-gray-400 mt-0.5">
+                                                            {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                                        </p>
+                                                    </div>
+                                                );
+                                            })() : <span className="text-gray-300">—</span>}
+                                        </td>
+                                        <td className="px-6 py-6">
+                                            {req.job_posting?.created_at ? (() => {
+                                                const d = new Date(req.job_posting.created_at);
+                                                return (
+                                                    <div>
+                                                        <p className="text-[12px] font-bold text-[#1A2B3D]">
+                                                            {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                        </p>
+                                                        <p className="text-[11px] text-emerald-600 font-bold mt-0.5">
+                                                            {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                                        </p>
+                                                    </div>
+                                                );
+                                            })() : (
+                                                <span className="px-2 py-1 bg-gray-100 text-gray-400 text-[10px] font-black uppercase tracking-widest rounded">
+                                                    Not Posted
+                                                </span>
+                                            )}
                                         </td>
                                         <td className="px-6 py-6">
                                             {req.status === 'pending' ? (
@@ -442,7 +474,7 @@ export default function HRManagerDashboard({ user, activeTab: initialTab, onLogo
                                         <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Justification / Description</h3>
                                         {drawerReq.jd_path && (
                                             <a
-                                                href={`${API_URL.replace('/api', '/storage')}/${drawerReq.jd_path}`}
+                                                href={`${API_URL}/v1/requisitions/${drawerReq.id}/jd?token=${typeof window !== 'undefined' ? localStorage.getItem('auth_token') : ''}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex items-center gap-2 text-[10px] font-black text-[#1F7A6E] hover:underline uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-lg transition-all"

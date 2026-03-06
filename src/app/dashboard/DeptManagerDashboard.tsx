@@ -253,15 +253,15 @@ export default function DeptManagerDashboard({ user, activeTab: initialTab, onLo
                             <table className="w-full text-left">
                                 <thead className="bg-[#F9FAFB] border-b border-gray-100">
                                     <tr>
-                                        {['REQUISITION', 'HIRING MANAGER', 'LOCATION', 'SALARY', 'PLAN DATE', 'STATUS'].map(h => (
+                                        {['REQUISITION', 'HIRING MANAGER', 'LOCATION', 'SALARY', 'SUBMITTED ON', 'POSTED TO PORTAL', 'STATUS'].map(h => (
                                             <th key={h} className="px-8 py-4 text-[11px] font-black text-gray-400 uppercase tracking-widest">{h}</th>
                                         ))}
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
                                     {requisitions === null ? null : requisitions.length === 0 ? (
-                                        <tr><td colSpan={6} className="px-8 py-20 text-center text-gray-400 italic text-sm">No requisitions created yet for {user.tenant?.name || 'this company'}.</td></tr>
-                                    ) : requisitions.map((req) => (
+                                        <tr><td colSpan={7} className="px-8 py-20 text-center text-gray-400 italic text-sm">No requisitions created yet for {user.tenant?.name || 'this company'}.</td></tr>
+                                    ) : requisitions.map((req: any) => (
                                         <tr key={req.id} className="hover:bg-gray-50 transition-colors group cursor-pointer">
                                             <td className="px-8 py-6">
                                                 <p className="font-black text-[13px] text-[#0066CC] hover:underline group-hover:text-[#1F7A6E]">
@@ -280,8 +280,39 @@ export default function DeptManagerDashboard({ user, activeTab: initialTab, onLo
                                             <td className="px-8 py-6 text-[13px] text-[#1A2B3D] font-black">
                                                 {req.budget ? req.budget.toLocaleString() : '15,000'} ETB /mo
                                             </td>
-                                            <td className="px-8 py-6 text-[13px] text-gray-600">
-                                                {new Date(req.created_at).toLocaleDateString()}
+                                            <td className="px-8 py-6">
+                                                {req.created_at ? (() => {
+                                                    const d = new Date(req.created_at);
+                                                    return (
+                                                        <div>
+                                                            <p className="text-[12px] font-bold text-[#1A2B3D]">
+                                                                {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                            </p>
+                                                            <p className="text-[11px] text-gray-400 mt-0.5">
+                                                                {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                                            </p>
+                                                        </div>
+                                                    );
+                                                })() : <span className="text-gray-300">—</span>}
+                                            </td>
+                                            <td className="px-8 py-6">
+                                                {req.job_posting?.created_at ? (() => {
+                                                    const d = new Date(req.job_posting.created_at);
+                                                    return (
+                                                        <div>
+                                                            <p className="text-[12px] font-bold text-[#1A2B3D]">
+                                                                {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                            </p>
+                                                            <p className="text-[11px] text-emerald-600 font-bold mt-0.5">
+                                                                {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                                            </p>
+                                                        </div>
+                                                    );
+                                                })() : (
+                                                    <span className="px-2 py-1 bg-gray-100 text-gray-400 text-[10px] font-black uppercase tracking-widest rounded">
+                                                        Not Posted
+                                                    </span>
+                                                )}
                                             </td>
                                             <td className="px-8 py-6">
                                                 <div className="flex items-center justify-between gap-4">

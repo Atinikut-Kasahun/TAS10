@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -40,6 +40,17 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
     const [mentionSuccess, setMentionSuccess] = useState(false);
     const [departmentUsers, setDepartmentUsers] = useState<any[]>([]);
 
+    // Manual Candidate Add Modal
+    const [addCandidateModal, setAddCandidateModal] = useState(false);
+    const [candidateForm, setCandidateForm] = useState({ name: '', email: '', phone: '', source: 'LinkedIn', job_posting_id: '' });
+    const [candidateSuccess, setCandidateSuccess] = useState(false);
+    const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
+    const [employeeStatusModal, setEmployeeStatusModal] = useState(false);
+    const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
+    const [employeeStatusForm, setEmployeeStatusForm] = useState({ status: 'active', reason: '', date: '' });
+    const [employees, setEmployees] = useState<any[] | null>(null);
+    const [employeesPagination, setEmployeesPagination] = useState<any>(null);
+
     useEffect(() => {
         if (drawerApp) {
             apiFetch('/v1/users').then(data => setDepartmentUsers(data || []));
@@ -74,6 +85,57 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
         }
     };
 
+    const handleAddCandidate = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!candidateForm.name || !candidateForm.email || !candidateForm.job_posting_id) return;
+        setActionLoading(true);
+        try {
+            await apiFetch('/v1/applicants', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(candidateForm),
+            });
+            setCandidateSuccess(true);
+
+            // Refresh data immediately
+            fetchData(currentPage);
+
+            // Wait 2 seconds before closing modal to show success message
+            setTimeout(() => {
+                setCandidateSuccess(false);
+                setAddCandidateModal(false);
+                setCandidateForm({ name: '', email: '', phone: '', source: 'LinkedIn', job_posting_id: '' });
+            }, 2000);
+        } catch (err) {
+            console.error('Failed to add candidate', err);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleUpdateEmployeeStatus = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedEmployee) return;
+        setActionLoading(true);
+        try {
+            await apiFetch(`/v1/employees/${selectedEmployee.id}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    employment_status: employeeStatusForm.status,
+                    separation_reason: employeeStatusForm.reason,
+                    separation_date: employeeStatusForm.date
+                }),
+            });
+            setEmployeeStatusModal(false);
+            fetchData(currentPage);
+        } catch (err) {
+            console.error('Failed to update employee status', err);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     // Refetch when filters change
     useEffect(() => {
         if (initialTab === 'Reports') {
@@ -93,16 +155,60 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                     job_id: reportFilters.jobId,
                     search: search
                 });
-                const [statsData, jobsData] = await Promise.all([
+                const [statsData, jobsData, turnoverData] = await Promise.all([
                     apiFetch(`/v1/applicants/stats?${params.toString()}`),
-                    apiFetch('/v1/jobs?page=1') // Fetch jobs for filters
+                    apiFetch('/v1/jobs?page=1'), // Fetch jobs for filters
+                    apiFetch('/v1/employees/turnover')
                 ]);
-                setStats(statsData);
+                setStats({ ...statsData, turnover: turnoverData?.turnover, turnoverTrend: turnoverData?.trend });
                 if (jobsData?.data) setJobs(jobsData.data);
                 else setJobs(jobsData || []);
                 setStatsLoading(false);
                 setLoading(false);
                 return; // Stop here — no need for reqs/applicants on Reports
+            }
+
+            if (initialTab === 'Employees') {
+                const searchParam = search ? `&search=${encodeURIComponent(search)}` : '';
+                if (subTab === 'HIRED' || subTab === 'ACTIVE') {
+                    // Fetch Pipeline/Newly Hired (Applicants)
+                    const statusParam = subTab === 'HIRED' ? 'hired' : 'active';
+                    const appsResponse = await apiFetch(`/v1/applicants?page=${page}&status=${statusParam}${searchParam}`);
+                    if (appsResponse?.data) {
+                        setApplicants(appsResponse.data);
+                        setApplicantsPagination({
+                            total: appsResponse.total,
+                            current_page: appsResponse.current_page,
+                            last_page: appsResponse.last_page,
+                            from: appsResponse.from,
+                            to: appsResponse.to
+                        });
+                        setCurrentPage(appsResponse.current_page);
+                    } else {
+                        setApplicants(appsResponse || []);
+                        setApplicantsPagination(null);
+                    }
+                } else {
+                    // Fetch Staff (STAFF or SEPARATED)
+                    const empStatus = subTab === 'SEPARATED' ? 'resigned' : 'active';
+                    const employeesResponse = await apiFetch(`/v1/employees?page=${page}&status=${empStatus}${searchParam}`);
+                    if (employeesResponse?.data) {
+                        setEmployees(employeesResponse.data);
+                        setEmployeesPagination({
+                            total: employeesResponse.total,
+                            current_page: employeesResponse.current_page,
+                            last_page: employeesResponse.last_page,
+                            from: employeesResponse.from,
+                            to: employeesResponse.to
+                        });
+                        setCurrentPage(employeesResponse.current_page);
+                    } else {
+                        setEmployees(employeesResponse || []);
+                        setEmployeesPagination(null);
+                    }
+                }
+                setLoading(false);
+                return;
             }
 
             if (initialTab === 'Calendar') {
@@ -180,7 +286,7 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
 
     useEffect(() => {
         fetchData(1);
-    }, [subTab, search]); // Re-fetch when subtab or search changes
+    }, [initialTab, subTab, search]); // Re-fetch when tab, subtab or search changes
 
     useEffect(() => {
         // Reset loading and clear data when tab changes to prevent "No Results" flicker
@@ -421,8 +527,10 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                             'INTERVIEWS': 'Interviews',
                             'OFFERS': 'Offers',
                             'REJECTED': 'Rejected',
-                            'HIRED': 'Roster',
-                            'ACTIVE': 'Active',
+                            'HIRED': 'Newly Hired',
+                            'ACTIVE': 'Active Pipeline',
+                            'STAFF': 'Professional Staff',
+                            'SEPARATED': 'Separated Staff',
                             'ARCHIVED': 'Archived',
                             'REQUISITIONS': 'Requisitions',
                             'OVERVIEW': 'Overview',
@@ -452,7 +560,7 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                             let items: string[] = [];
                             if (initialTab === 'Candidates') items = ['NEW', 'INTERVIEWS', 'OFFERS', 'REJECTED'];
                             else if (initialTab === 'Jobs' || initialTab === 'HiringPlan') items = ['JOBS', 'HIRING PLAN'];
-                            else if (initialTab === 'Employees') items = ['HIRED'];
+                            else if (initialTab === 'Employees') items = ['HIRED', 'ACTIVE', 'STAFF', 'SEPARATED'];
                             else if (initialTab === 'Reports') items = ['OVERVIEW'];
                             else items = ['OVERVIEW'];
 
@@ -658,8 +766,19 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                             <p className="text-xs font-medium text-gray-400">Manage talent through the {subTab.toLowerCase()} stage</p>
                         </div>
                         <div className="flex items-center gap-4">
+                            {initialTab === 'Candidates' && (
+                                <button
+                                    onClick={() => setAddCandidateModal(true)}
+                                    className="bg-[#1F7A6E] hover:bg-[#165C53] text-white px-4 py-2 rounded-xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-[#1F7A6E]/20 transition-all flex items-center gap-2"
+                                >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4" /></svg>
+                                    Add Candidate
+                                </button>
+                            )}
                             <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest bg-gray-50 px-4 py-2 rounded-full border border-gray-100">
-                                Total: <span className="text-[#1A2B3D]">{applicantsPagination?.total || 0}</span>
+                                Total: <span className="text-[#1A2B3D]">
+                                    {loading ? '...' : (initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED')) ? (employeesPagination?.total ?? 0) : (applicantsPagination?.total ?? 0)}
+                                </span>
                             </p>
                         </div>
                     </div>
@@ -667,113 +786,151 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                     <table className="w-full text-left">
                         <thead className="bg-[#F9FAFB] border-b border-gray-100">
                             <tr>
-                                {initialTab === 'Employees'
-                                    ? ['CANDIDATE', 'ROLE', 'DEPARTMENT', 'EXPERIENCE', 'STATUS', 'APPLIED ON', 'HIRED ON'].map(h => (
+                                {(initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED'))
+                                    ? ['CANDIDATE', 'ROLE', 'DEPARTMENT', 'STATUS', subTab === 'SEPARATED' ? 'SEPARATION DATE' : 'JOINED DATE', 'ACTIONS'].map(h => (
                                         <th key={h} className="px-8 py-4 text-[11px] font-black text-gray-400 uppercase tracking-widest">{h}</th>
                                     ))
-                                    : ['CANDIDATE', 'APPLIED FOR', 'DEPARTMENT', 'EXPERIENCE', 'MATCHING', 'STATUS', 'APPLIED ON'].map(h => (
+                                    : ['CANDIDATE', 'APPLIED FOR', 'DEPARTMENT', 'EXPERIENCE', 'MATCHING', 'STATUS', 'APPLIED ON', (initialTab === 'Employees' ? 'ACTIONS' : null)].filter(Boolean).map(h => (
                                         <th key={h} className="px-8 py-4 text-[11px] font-black text-gray-400 uppercase tracking-widest">{h}</th>
                                     ))}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                            {applicants === null ? null : applicants.length === 0 ? (
-                                <tr><td colSpan={7} className="px-8 py-20 text-center text-gray-400 italic text-sm">No {subTab.toLowerCase()} talent currently in the pipeline for {user.tenant?.name || 'this company'}.</td></tr>
-                            ) : (
-                                applicants.map((app: any) => (
-                                    <tr
-                                        key={app.id}
-                                        className="hover:bg-gray-50 transition-colors group cursor-pointer"
-                                        onClick={() => setDrawerApp(app)}
-                                    >
-                                        <td className="px-8 py-6">
-                                            <div className="flex items-center gap-4">
-                                                <div className="relative group/avatar">
-                                                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center overflow-hidden border border-gray-100 group-hover:border-[#1F7A6E] transition-all duration-300 shadow-sm">
-                                                        {app.photo_path ? (
-                                                            <img
-                                                                src={app.photo_path.startsWith('http') ? app.photo_path : `${API_URL.replace('/api', '/storage')}/${app.photo_path}`}
-                                                                alt=""
-                                                                className="w-full h-full object-cover transition-transform duration-500 group-hover/avatar:scale-110"
-                                                                onError={(e) => {
-                                                                    (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(app.name)}&background=1F7A6E&color=fff&bold=true`;
-                                                                }}
-                                                            />
-                                                        ) : (
-                                                            <span className="text-sm font-black text-[#1F7A6E]">{app.name.split(' ').map((n: string) => n[0]).join('')}</span>
-                                                        )}
-                                                    </div>
-                                                    <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white bg-emerald-500 shadow-sm" />
-                                                </div>
-                                                <div className="space-y-0.5">
-                                                    <p className="font-black text-[14px] text-[#1A2B3D] tracking-tight group-hover:text-[#1F7A6E] transition-colors">{app.name}</p>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{app.email}</span>
-                                                        <span className="w-1 h-1 rounded-full bg-gray-200" />
-                                                        <span className="text-[10px] font-bold text-[#1F7A6E] uppercase tracking-widest">{app.phone || 'No Phone'}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td className="px-8 py-6">
-                                            <p className="text-[13px] font-bold text-[#1A2B3D]">{app.job_posting?.title || 'Open Role'}</p>
-                                            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest mt-0.5">Reference: REQ{app.job_posting?.job_requisition_id || '---'}</p>
-                                        </td>
-                                        <td className="px-8 py-6 text-[13px] text-gray-600 font-medium">
-                                            {app.job_posting?.department || app.job_posting?.requisition?.department || '-'}
-                                        </td>
-                                        <td className="px-8 py-6 text-[13px] text-gray-600">
-                                            {app.years_of_experience || '0'} Years
-                                        </td>
-                                        {initialTab !== 'Employees' && (
+                            {(initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED')) ? (
+                                employees === null ? null : employees.length === 0 ? (
+                                    <tr><td colSpan={7} className="px-8 py-20 text-center text-gray-400 italic text-sm">No internal users found in this category.</td></tr>
+                                ) : (
+                                    employees.map((emp: any) => (
+                                        <tr key={emp.id} className="hover:bg-gray-50 transition-colors group">
                                             <td className="px-8 py-6">
-                                                <div className="w-24 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                                                    <div className="h-full bg-[#1F7A6E]" style={{ width: `${app.match_score || 75}%` }} />
-                                                </div>
-                                                <p className="text-[10px] font-black text-[#1F7A6E] mt-1 uppercase">{app.match_score || 75}% Match</p>
-                                            </td>
-                                        )}
-                                        <td className="px-8 py-6">
-                                            {app.status === 'interview' && app.interviews && app.interviews.length > 0 ? (
-                                                <span className="px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-widest bg-purple-50 text-purple-600">
-                                                    Scheduled: {(() => {
-                                                        const d = new Date(app.interviews[0].scheduled_at);
-                                                        return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
-                                                    })()}
-                                                </span>
-                                            ) : (
-                                                <span className={`px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-widest ${app.status === 'hired' ? 'bg-emerald-50 text-emerald-600' :
-                                                    app.status === 'rejected' ? 'bg-red-50 text-red-600' :
-                                                        app.status === 'interview' ? 'bg-purple-50 text-purple-600' :
-                                                            app.status === 'offer' ? 'bg-amber-50 text-amber-600' :
-                                                                'bg-blue-50 text-blue-600'
-                                                    }`}>
-                                                    {app.status}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className="px-8 py-6">
-                                            {app.created_at ? (() => {
-                                                const d = new Date(app.created_at);
-                                                const now = new Date();
-                                                const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
-                                                const relative = diffDays === 0 ? 'Today' : diffDays === 1 ? 'Yesterday' : `${diffDays}d ago`;
-                                                return (
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center font-black text-[#1F7A6E]">
+                                                        {emp.name.split(' ').map((n: string) => n[0]).join('')}
+                                                    </div>
                                                     <div>
-                                                        <p className="text-[12px] font-bold text-[#1A2B3D]">
-                                                            {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                                                        </p>
-                                                        <p className="text-[11px] text-gray-400 mt-0.5">
-                                                            {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} · <span className="text-[#1F7A6E] font-black">{relative}</span>
-                                                        </p>
+                                                        <p className="font-black text-[14px] text-[#1A2B3D]">{emp.name}</p>
+                                                        <p className="text-[10px] font-bold text-gray-400 lowercase tracking-widest">{emp.email}</p>
                                                     </div>
-                                                );
-                                            })() : <span className="text-gray-300 text-xs">—</span>}
-                                        </td>
-                                        {initialTab === 'Employees' && (
+                                                </div>
+                                            </td>
+                                            <td className="px-8 py-6 text-[13px] text-gray-600 font-medium lowercase">
+                                                {emp.roles?.map((r: any) => r.name).join(', ') || 'Staff'}
+                                            </td>
+                                            <td className="px-8 py-6 text-[13px] text-gray-600 font-medium">
+                                                {emp.department || '-'}
+                                            </td>
+                                            <td className="px-8 py-4">
+                                                <span className={`px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-widest ${emp.employment_status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'
+                                                    }`}>
+                                                    {emp.employment_status}
+                                                </span>
+                                            </td>
+                                            <td className="px-8 py-6 text-[13px] text-gray-600">
+                                                {subTab === 'SEPARATED'
+                                                    ? (emp.separation_date ? new Date(emp.separation_date).toLocaleDateString() : 'N/A')
+                                                    : (emp.joined_date ? new Date(emp.joined_date).toLocaleDateString() : '-')}
+                                            </td>
                                             <td className="px-8 py-6">
-                                                {app.updated_at ? (() => {
-                                                    const d = new Date(app.updated_at);
+                                                <button
+                                                    onClick={() => {
+                                                        setSelectedEmployee(emp);
+                                                        setEmployeeStatusForm({
+                                                            status: emp.employment_status,
+                                                            reason: emp.separation_reason || '',
+                                                            date: emp.separation_date || new Date().toISOString().split('T')[0]
+                                                        });
+                                                        setEmployeeStatusModal(true);
+                                                    }}
+                                                    className="text-[10px] font-black text-[#1F7A6E] uppercase tracking-widest hover:underline"
+                                                >
+                                                    Manage
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )
+                            ) : (
+                                applicants === null ? null : applicants.length === 0 ? (
+                                    <tr><td colSpan={7} className="px-8 py-20 text-center text-gray-400 italic text-sm">No {subTab.toLowerCase()} talent currently in the pipeline for {user.tenant?.name || 'this company'}.</td></tr>
+                                ) : (
+                                    applicants.map((app: any) => (
+                                        <tr
+                                            key={app.id}
+                                            className="hover:bg-gray-50 transition-colors group cursor-pointer"
+                                            onClick={() => setDrawerApp(app)}
+                                        >
+                                            <td className="px-8 py-6">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="relative group/avatar">
+                                                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center overflow-hidden border border-gray-100 group-hover:border-[#1F7A6E] transition-all duration-300 shadow-sm">
+                                                            {app.photo_path ? (
+                                                                <img
+                                                                    src={app.photo_path.startsWith('http') ? app.photo_path : `${API_URL.replace('/api', '/storage')}/${app.photo_path}`}
+                                                                    alt=""
+                                                                    className="w-full h-full object-cover transition-transform duration-500 group-hover/avatar:scale-110"
+                                                                    onError={(e) => {
+                                                                        (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(app.name)}&background=1F7A6E&color=fff&bold=true`;
+                                                                    }}
+                                                                />
+                                                            ) : (
+                                                                <span className="text-sm font-black text-[#1F7A6E]">{app.name.split(' ').map((n: string) => n[0]).join('')}</span>
+                                                            )}
+                                                        </div>
+                                                        <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white bg-emerald-500 shadow-sm" />
+                                                    </div>
+                                                    <div className="space-y-0.5">
+                                                        <p className="font-black text-[14px] text-[#1A2B3D] tracking-tight group-hover:text-[#1F7A6E] transition-colors">{app.name}</p>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{app.email}</span>
+                                                            <span className="w-1 h-1 rounded-full bg-gray-200" />
+                                                            <span className="text-[10px] font-bold text-[#1F7A6E] uppercase tracking-widest">{app.phone || 'No Phone'}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-8 py-6">
+                                                <p className="text-[13px] font-bold text-[#1A2B3D]">{app.job_posting?.title || 'Open Role'}</p>
+                                                <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest mt-0.5">Reference: REQ{app.job_posting?.job_requisition_id || '---'}</p>
+                                            </td>
+                                            <td className="px-8 py-6 text-[13px] text-gray-600 font-medium">
+                                                {app.job_posting?.department || app.job_posting?.requisition?.department || '-'}
+                                            </td>
+                                            <td className="px-8 py-6 text-[13px] text-gray-600">
+                                                {app.years_of_experience || '0'} Years
+                                            </td>
+                                            <td className="px-8 py-6">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                                        <div
+                                                            className="h-full bg-emerald-500 rounded-full"
+                                                            style={{ width: `${app.match_score || 85}%` }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-[11px] font-black text-[#1A2B3D]">{app.match_score || 85}%</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-8 py-6">
+                                                {app.status === 'interview' && app.interviews && app.interviews.length > 0 ? (
+                                                    <span className="px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-widest bg-purple-50 text-purple-600">
+                                                        Scheduled: {(() => {
+                                                            const d = new Date(app.interviews[0].scheduled_at);
+                                                            return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+                                                        })()}
+                                                    </span>
+                                                ) : (
+                                                    <span className={`px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-widest ${app.status === 'hired' ? 'bg-emerald-50 text-emerald-600' :
+                                                        app.status === 'rejected' ? 'bg-red-50 text-red-600' :
+                                                            app.status === 'interview' ? 'bg-purple-50 text-purple-600' :
+                                                                app.status === 'offer' ? 'bg-amber-50 text-amber-600' :
+                                                                    'bg-blue-50 text-blue-600'
+                                                        }`}>
+                                                        {app.status}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-8 py-6">
+                                                {app.created_at ? (() => {
+                                                    const d = new Date(app.created_at);
                                                     const now = new Date();
                                                     const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
                                                     const relative = diffDays === 0 ? 'Today' : diffDays === 1 ? 'Yesterday' : `${diffDays}d ago`;
@@ -789,19 +946,33 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                                                     );
                                                 })() : <span className="text-gray-300 text-xs">—</span>}
                                             </td>
-                                        )}
-                                    </tr>
-                                ))
+                                            {initialTab === 'Employees' && (
+                                                <td className="px-8 py-6">
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setDrawerApp(app);
+                                                        }}
+                                                        className="text-[10px] font-black text-[#1F7A6E] uppercase tracking-widest hover:underline"
+                                                    >
+                                                        Manage
+                                                    </button>
+                                                </td>
+                                            )}
+                                        </tr>
+                                    ))
+                                )
                             )}
                         </tbody>
                     </table>
 
                     {/* Pagination Controls */}
-                    {applicantsPagination && applicantsPagination.last_page > 1 && (
+                    {/* Pagination Controls */}
+                    {((initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED')) ? employeesPagination : applicantsPagination) && ((initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED')) ? employeesPagination : applicantsPagination).last_page > 1 && (
                         <div className="px-8 py-4 bg-gray-50/50 border-t border-gray-100 flex items-center justify-between">
                             <div className="flex items-center gap-2">
                                 <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest">
-                                    Showing <span className="text-[#1A2B3D]">{applicantsPagination.from}</span> - <span className="text-[#1A2B3D]">{applicantsPagination.to}</span> of <span className="text-[#1A2B3D]">{applicantsPagination.total}</span>
+                                    Showing <span className="text-[#1A2B3D]">{((initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED')) ? employeesPagination : applicantsPagination).from}</span> - <span className="text-[#1A2B3D]">{((initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED')) ? employeesPagination : applicantsPagination).to}</span> of <span className="text-[#1A2B3D]">{((initialTab === 'Employees' && (subTab === 'STAFF' || subTab === 'SEPARATED')) ? employeesPagination : applicantsPagination).total}</span>
                                 </p>
                             </div>
                             <div className="flex items-center gap-2">
@@ -813,7 +984,7 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg>
                                 </button>
 
-                                {[...Array(applicantsPagination.last_page)].map((_, i) => (
+                                {[...Array(((initialTab === 'Employees' && subTab !== 'HIRED') ? employeesPagination : applicantsPagination).last_page)].map((_, i) => (
                                     <button
                                         key={i + 1}
                                         onClick={() => fetchData(i + 1)}
@@ -828,15 +999,14 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
 
                                 <button
                                     onClick={() => fetchData(currentPage + 1)}
-                                    disabled={currentPage === applicantsPagination.last_page}
+                                    disabled={currentPage === ((initialTab === 'Employees' && subTab !== 'HIRED') ? employeesPagination : applicantsPagination).last_page}
                                     className="w-10 h-10 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-400 hover:text-[#1F7A6E] hover:border-[#1F7A6E] transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-sm"
                                 >
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" /></svg>
                                 </button>
                             </div>
                         </div>
-                    )
-                    }
+                    )}
                 </div >
             )
             }
@@ -846,14 +1016,14 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                     <table className="w-full text-left">
                         <thead className="bg-[#F9FAFB] border-b border-gray-100">
                             <tr>
-                                {['REQUISITION', 'HIRING MANAGER', 'REQUISITION OWNER', 'SALARY', 'PLAN DATE', 'STATUS'].map(h => (
+                                {['REQUISITION', 'HIRING MANAGER', 'LOCATION', 'SALARY', 'SUBMITTED ON', 'POSTED TO PORTAL', 'STATUS'].map(h => (
                                     <th key={h} className="px-8 py-4 text-[11px] font-black text-gray-400 uppercase tracking-widest">{h}</th>
                                 ))}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
                             {requisitions === null ? null : requisitions.length === 0 ? (
-                                <tr><td colSpan={6} className="px-8 py-20 text-center text-gray-400 italic text-sm">No hiring plan items yet for {user.tenant?.name || 'this company'}.</td></tr>
+                                <tr><td colSpan={7} className="px-8 py-20 text-center text-gray-400 italic text-sm">No hiring plan items yet for {user.tenant?.name || 'this company'}.</td></tr>
                             ) : requisitions.map((req: any) => (
                                 <tr
                                     key={req.id}
@@ -877,8 +1047,39 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                                     <td className="px-8 py-6 text-[13px] text-[#1A2B3D] font-black">
                                         {req.budget ? req.budget.toLocaleString() : '15,000'} ETB /mo
                                     </td>
-                                    <td className="px-8 py-6 text-[13px] text-gray-600">
-                                        {new Date(req.created_at).toLocaleDateString()}
+                                    <td className="px-8 py-6">
+                                        {req.created_at ? (() => {
+                                            const d = new Date(req.created_at);
+                                            return (
+                                                <div>
+                                                    <p className="text-[12px] font-bold text-[#1A2B3D]">
+                                                        {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                    </p>
+                                                    <p className="text-[11px] text-gray-400 mt-0.5">
+                                                        {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                                    </p>
+                                                </div>
+                                            );
+                                        })() : <span className="text-gray-300">—</span>}
+                                    </td>
+                                    <td className="px-8 py-6">
+                                        {req.job_posting?.created_at ? (() => {
+                                            const d = new Date(req.job_posting.created_at);
+                                            return (
+                                                <div>
+                                                    <p className="text-[12px] font-bold text-[#1A2B3D]">
+                                                        {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                    </p>
+                                                    <p className="text-[11px] text-emerald-600 font-bold mt-0.5">
+                                                        {d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                                                    </p>
+                                                </div>
+                                            );
+                                        })() : (
+                                            <span className="px-2 py-1 bg-gray-100 text-gray-400 text-[10px] font-black uppercase tracking-widest rounded">
+                                                Not Posted
+                                            </span>
+                                        )}
                                     </td>
                                     <td className="px-8 py-6">
                                         <span className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest ${req.status === 'approved' ? 'bg-emerald-50 text-emerald-600' :
@@ -975,63 +1176,12 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
 
             {
                 initialTab === 'Reports' && (
-                    <div className="flex bg-gray-50 min-h-[calc(100vh-100px)]">
-                        {/* Slim left sidebar for filters */}
-                        <div className="w-64 bg-white border-r border-gray-100 p-6 space-y-6 sticky top-0 h-screen overflow-y-auto">
-                            <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Filters</h3>
+                    <div className="bg-gray-50/50 min-h-[calc(100vh-100px)]">
 
-                            <div className="space-y-2">
-                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Timeframe</p>
-                                <select
-                                    value={reportFilters.dateRange}
-                                    onChange={e => { setReportFilters(prev => ({ ...prev, dateRange: e.target.value })); fetchData(1); }}
-                                    className="w-full p-2 text-sm font-bold text-[#1A2B3D] bg-gray-50 border border-gray-100 rounded-lg outline-none cursor-pointer focus:border-[#1F7A6E] transition-colors"
-                                >
-                                    <option value="7">Last 7 Days</option>
-                                    <option value="30">Last 30 Days</option>
-                                    <option value="90">Last 90 Days</option>
-                                    <option value="All">All Time</option>
-                                </select>
-                            </div>
 
-                            <div className="space-y-2">
-                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Department</p>
-                                <select
-                                    value={reportFilters.department}
-                                    onChange={e => { setReportFilters(prev => ({ ...prev, department: e.target.value })); fetchData(1); }}
-                                    className="w-full p-2 text-sm font-bold text-[#1A2B3D] bg-gray-50 border border-gray-100 rounded-lg outline-none cursor-pointer focus:border-[#1F7A6E] transition-colors"
-                                >
-                                    <option value="All">All Departments</option>
-                                    {[...new Set((jobs || []).map(j => j.department || j.requisition?.department).filter(Boolean))].map(dept => (
-                                        <option key={String(dept)} value={String(dept)}>{String(dept)}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Specific Role</p>
-                                <select
-                                    value={reportFilters.jobId}
-                                    onChange={e => { setReportFilters(prev => ({ ...prev, jobId: e.target.value })); fetchData(1); }}
-                                    className="w-full p-2 text-sm font-bold text-[#1A2B3D] bg-gray-50 border border-gray-100 rounded-lg outline-none cursor-pointer focus:border-[#1F7A6E] transition-colors truncate"
-                                >
-                                    <option value="All">All Open Roles</option>
-                                    {(jobs || []).map(job => (
-                                        <option key={job.id} value={job.id}>{job.title}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <button onClick={() => fetchData(1)} className="w-full mt-6 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
-                                <svg className={`w-3.5 h-3.5 ${statsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004 12m0 8h5.082m-5.082-5H19a4 4 0 003.582-5H19" /></svg>
-                                {statsLoading ? 'Loading…' : 'Refresh'}
-                            </button>
-                        </div>
-
-                        {/* Main content area */}
                         {statsLoading && !stats ? (
                             /* Skeleton placeholder while data loads */
-                            <div className="flex-1 p-10 space-y-6 animate-pulse">
+                            <div className="p-10 space-y-6 animate-pulse">
                                 <div className="grid grid-cols-4 gap-6">
                                     {[...Array(4)].map((_, i) => (
                                         <div key={i} className="bg-white p-5 rounded-2xl border border-gray-100 flex items-center gap-4">
@@ -1052,184 +1202,689 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                                 </div>
                             </div>
                         ) : (
-                            <div className="flex-1 p-10 space-y-10">
+                            <div className="p-10 space-y-6">
 
-                                {/* Tight Metric Cards */}
-                                <div className="grid grid-cols-4 gap-6">
+                                {/* ── Top Greeting ── */}
+                                <div className="flex items-end justify-between">
+                                    <div>
+                                        <h2 className="text-3xl font-black text-[#1A2B3D]">Welcome, {user.name}!</h2>
+                                        <p className="text-sm font-medium text-gray-500 mt-1">Manage candidates and track applications</p>
+                                    </div>
+                                    {/* Live data badge */}
+                                    <div className="flex items-center gap-2 bg-white border border-gray-100 shadow-sm px-3 py-1.5 rounded-xl">
+                                        <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Live Data</span>
+                                    </div>
+                                </div>
+
+                                {/* ── Horizontal Filter Utility Bar ── */}
+                                <div className="bg-white border border-gray-100 shadow-sm rounded-2xl px-5 py-3.5 flex items-center gap-3 flex-wrap">
+
+                                    {/* Section label */}
+                                    <div className="flex items-center gap-2 pr-4 border-r border-gray-100">
+                                        <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z" />
+                                        </svg>
+                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Filters</span>
+                                    </div>
+
+                                    {/* Timeframe */}
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest hidden sm:block">Timeframe</span>
+                                        <select
+                                            value={reportFilters.dateRange}
+                                            onChange={e => { setReportFilters(prev => ({ ...prev, dateRange: e.target.value })); fetchData(1); }}
+                                            className="text-[11px] font-bold text-[#1A2B3D] bg-gray-50/80 border border-gray-100 rounded-xl px-3 py-2 outline-none cursor-pointer focus:border-[#1F7A6E] hover:border-gray-200 transition-all appearance-none shadow-sm"
+                                        >
+                                            <option value="7">Last 7 Days</option>
+                                            <option value="30">Last 30 Days</option>
+                                            <option value="90">Last 90 Days</option>
+                                            <option value="All">All Time</option>
+                                        </select>
+                                    </div>
+
+                                    {/* Divider */}
+                                    <div className="h-5 w-px bg-gray-100" />
+
+                                    {/* Department */}
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest hidden sm:block">Department</span>
+                                        <select
+                                            value={reportFilters.department}
+                                            onChange={e => { setReportFilters(prev => ({ ...prev, department: e.target.value })); fetchData(1); }}
+                                            className="text-[11px] font-bold text-[#1A2B3D] bg-gray-50/80 border border-gray-100 rounded-xl px-3 py-2 outline-none cursor-pointer focus:border-[#1F7A6E] hover:border-gray-200 transition-all appearance-none shadow-sm max-w-[160px]"
+                                        >
+                                            <option value="All">All Departments</option>
+                                            {[...new Set((jobs || []).map(j => j.department || j.requisition?.department).filter(Boolean))].map(dept => (
+                                                <option key={String(dept)} value={String(dept)}>{String(dept)}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {/* Divider */}
+                                    <div className="h-5 w-px bg-gray-100" />
+
+                                    {/* Specific Role */}
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest hidden sm:block">Role</span>
+                                        <select
+                                            value={reportFilters.jobId}
+                                            onChange={e => { setReportFilters(prev => ({ ...prev, jobId: e.target.value })); fetchData(1); }}
+                                            className="text-[11px] font-bold text-[#1A2B3D] bg-gray-50/80 border border-gray-100 rounded-xl px-3 py-2 outline-none cursor-pointer focus:border-[#1F7A6E] hover:border-gray-200 transition-all appearance-none shadow-sm max-w-[180px]"
+                                        >
+                                            <option value="All">All Open Roles</option>
+                                            {(jobs || []).map(job => (
+                                                <option key={job.id} value={job.id}>{job.title}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {/* Spacer — pushes refresh to the far right */}
+                                    <div className="flex-1" />
+
+                                    {/* Refresh icon button (far right) */}
+                                    <button
+                                        onClick={() => fetchData(1)}
+                                        title="Refresh data"
+                                        className={`w-9 h-9 flex items-center justify-center rounded-xl border transition-all shadow-sm ${statsLoading
+                                            ? 'bg-[#1F7A6E]/5 border-[#1F7A6E]/20 text-[#1F7A6E] cursor-not-allowed'
+                                            : 'bg-gray-50 border-gray-100 text-gray-400 hover:bg-[#1F7A6E]/5 hover:border-[#1F7A6E]/30 hover:text-[#1F7A6E]'
+                                            }`}
+                                    >
+                                        <svg
+                                            className={`w-4 h-4 ${statsLoading ? 'animate-spin' : ''}`}
+                                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                        >
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5"
+                                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                        </svg>
+                                    </button>
+                                </div>
+
+                                {/* KPI Row (Top): Executive Summary Layer */}
+                                <div className="grid grid-cols-4 gap-8">
                                     {[
                                         {
-                                            label: 'Total Placements',
-                                            value: stats?.funnel?.hired || 0,
-                                            icon: (
-                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-                                                </svg>
-                                            ),
-                                            color: 'emerald'
-                                        },
-                                        {
-                                            label: 'Active Pipeline',
-                                            value: (stats?.funnel?.applied || 0) - (stats?.funnel?.hired || 0) - (stats?.funnel?.rejected || 0),
+                                            label: 'Total Employees',
+                                            value: stats?.total_employees?.toLocaleString() || '0',
+                                            trend: `${stats?.total_employees_trend > 0 ? '+' : ''}${stats?.total_employees_trend || 0}% from last month`,
+                                            isPositive: true,
                                             icon: (
                                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                                                 </svg>
                                             ),
-                                            color: 'blue'
+                                            color: 'text-indigo-500',
+                                            bg: 'bg-indigo-50/50'
                                         },
                                         {
-                                            label: 'Pending Reqs',
-                                            value: stats?.requisitions?.pending || 0,
+                                            label: 'Active Applicants',
+                                            value: stats?.funnel?.applied?.toLocaleString() || '0',
+                                            trend: '-1.3% from last week',
+                                            isPositive: false,
                                             icon: (
                                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                                 </svg>
                                             ),
-                                            color: 'amber'
+                                            color: 'text-amber-500',
+                                            bg: 'bg-amber-50/50'
                                         },
                                         {
-                                            label: 'Success Rate',
-                                            value: stats?.funnel?.applied > 0 ? Math.round((stats.funnel.hired / stats.funnel.applied) * 100) + '%' : '0%',
+                                            label: 'Retention Rate',
+                                            value: (stats?.retention_rate || 98) + '%',
+                                            trend: stats?.retention_rate >= 95 ? '+0.5% Healthy' : '-1.2% Review Needed',
+                                            isPositive: (stats?.retention_rate || 98) >= 95,
                                             icon: (
                                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004 12m0 8h5.082m-5.082-5H19a4 4 0 003.582-5H19" />
                                                 </svg>
                                             ),
-                                            color: 'indigo'
+                                            color: 'text-[#1F7A6E]',
+                                            bg: 'bg-[#1F7A6E]/5'
+                                        },
+                                        {
+                                            label: 'Ongoing Job Openings',
+                                            value: stats?.total_active_jobs || 0,
+                                            trend: `${stats?.total_active_jobs_trend > 0 ? '+' : ''}${stats?.total_active_jobs_trend || 0}% Growth`,
+                                            isPositive: true,
+                                            icon: (
+                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                                                </svg>
+                                            ),
+                                            color: 'text-orange-500',
+                                            bg: 'bg-orange-50/50'
                                         },
                                     ].map((stat, i) => (
-                                        <div key={i} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 hover:scale-[1.02] transition-transform group">
-                                            <div className={`w-10 h-10 rounded-lg ${stat.color === 'emerald' ? 'bg-emerald-50 text-emerald-600' :
-                                                stat.color === 'blue' ? 'bg-blue-50 text-blue-600' :
-                                                    stat.color === 'amber' ? 'bg-amber-50 text-amber-600' :
-                                                        'bg-indigo-50 text-indigo-600'
-                                                } flex items-center justify-center shrink-0`}>
-                                                {stat.icon}
+                                        <div key={i} className="bg-white p-6 rounded-[24px] border border-gray-100 shadow-sm flex flex-col justify-between group hover:shadow-md hover:-translate-y-1 transition-all duration-300">
+                                            <div className="flex items-center gap-3 mb-4">
+                                                <div className={`w-10 h-10 rounded-xl ${stat.bg} ${stat.color} flex items-center justify-center shrink-0 shadow-sm`}>
+                                                    {stat.icon}
+                                                </div>
+                                                <p className="text-[13px] font-black text-gray-400 uppercase tracking-widest">{stat.label}</p>
                                             </div>
                                             <div>
-                                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">{stat.label}</p>
-                                                <p className="text-xl font-black text-[#1A2B3D]">{stat.value}</p>
+                                                <p className="text-[34px] font-black text-[#1A2B3D] tracking-tighter leading-none mb-3">{stat.value}</p>
+                                                <div className={`flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider ${stat.trend === 'Positions' ? 'text-gray-300' : stat.isPositive ? 'text-emerald-500' : 'text-red-400'}`}>
+                                                    {stat.trend !== 'Positions' && (
+                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            {stat.isPositive ? (
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3.5" d="M5 15l7-7 7 7" />
+                                                            ) : (
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3.5" d="M19 9l-7 7-7-7" />
+                                                            )}
+                                                        </svg>
+                                                    )}
+                                                    {stat.trend}
+                                                </div>
                                             </div>
                                         </div>
                                     ))}
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-10">
-                                    {/* Application Funnel (Compact) */}
-                                    <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-sm flex flex-col">
-                                        <h3 className="text-[13px] font-black text-[#1A2B3D] uppercase tracking-widest mb-6 flex items-center gap-2">
-                                            <div className="w-2 h-2 rounded-full bg-[#1F7A6E]" />
-                                            Hiring Funnel Analytics
-                                        </h3>
-                                        <div className="space-y-4 flex-1">
-                                            {[
-                                                { label: 'Applied', raw: 'new', tab: 'NEW', count: stats?.funnel?.applied || 0, color: '#1F7A6E', pct: 100 },
-                                                { label: 'Interviewed', raw: 'interview', tab: 'INTERVIEWS', count: stats?.funnel?.interview || 0, color: '#0066CC', pct: stats?.funnel?.applied ? Math.round(((stats?.funnel?.interview || 0) / stats.funnel.applied) * 100) : 0 },
-                                                { label: 'Offered', raw: 'offer', tab: 'OFFERS', count: stats?.funnel?.offer || 0, color: '#9B51E0', pct: stats?.funnel?.applied ? Math.round(((stats?.funnel?.offer || 0) / stats.funnel.applied) * 100) : 0 },
-                                                { label: 'Hired', raw: 'hired', tab: 'HIRED', count: stats?.funnel?.hired || 0, color: '#27AE60', pct: stats?.funnel?.applied ? Math.round(((stats?.funnel?.hired || 0) / stats.funnel.applied) * 100) : 0 },
-                                            ].map((item, i) => (
-                                                <div
-                                                    key={i}
-                                                    className="space-y-1 cursor-pointer group"
-                                                    onClick={() => {
-                                                        const url = new URL(window.location.href);
-                                                        url.searchParams.set('tab', 'Candidates');
-                                                        window.history.pushState({}, '', url);
-                                                        setSubTab(item.tab);
-                                                    }}
-                                                >
-                                                    <div className="flex justify-between items-end">
-                                                        <p className="text-[10px] font-black text-gray-400 group-hover:text-[#1A2B3D] transition-colors uppercase tracking-widest flex items-center gap-1">
-                                                            {item.label}
-                                                            <svg className="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M9 5l7 7-7 7" /></svg>
-                                                        </p>
-                                                        <p className="text-xs font-black text-[#1A2B3D]">{item.count} Talent</p>
-                                                    </div>
-                                                    <div className="h-3 bg-gray-50 rounded-full overflow-hidden border border-gray-100 p-0.5 group-hover:border-gray-200 transition-colors">
-                                                        <motion.div
-                                                            initial={{ width: 0 }}
-                                                            animate={{ width: `${item.pct}%` }}
-                                                            className="h-full rounded-full"
-                                                            style={{ backgroundColor: item.color }}
-                                                        />
+                                {/* Analytics Layer (Middle): Larger Chart Modules */}
+                                <div className="grid grid-cols-2 gap-8">
+                                    {/* Employee Turnover — Premium Spline Area Chart */}
+                                    <div className="bg-white p-8 rounded-[24px] border border-gray-100 shadow-sm flex flex-col relative overflow-hidden hover:shadow-md transition-all duration-300">
+
+                                        {/* ── Header ── */}
+                                        <div className="flex justify-between items-start mb-6 relative z-10">
+                                            <div>
+                                                <h3 className="text-[18px] font-black text-[#1A2B3D] tracking-tight">Employee Turnover</h3>
+                                                <div className="flex items-center gap-2 mt-2">
+                                                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Growth Analytics</p>
+                                                    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border ${stats?.turnoverTrend < 0 ? 'bg-emerald-50 text-emerald-600 border-emerald-100/50' : 'bg-red-50 text-red-600 border-red-100/50'}`}>
+                                                        <svg className="w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            {stats?.turnoverTrend < 0 ? (
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M19 9l-7 7-7-7" />
+                                                            ) : (
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M5 15l7-7 7 7" />
+                                                            )}
+                                                        </svg>
+                                                        <span className="text-[10px] font-black">{stats?.turnoverTrend > 0 ? '+' : ''}{stats?.turnoverTrend || 0}% from last month</span>
                                                     </div>
                                                 </div>
-                                            ))}
-                                            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest text-center mt-6 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                                💡 Click any stage to jump directly to those candidates
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    {/* Velocity & Sourcing Column */}
-                                    <div className="space-y-6 flex flex-col">
-
-                                        {/* Time To Hire Module */}
-                                        <div className="bg-white p-6 rounded-[32px] border border-gray-100 shadow-sm relative overflow-hidden group">
-                                            <div className="absolute top-0 right-0 p-6 opacity-5 group-hover:opacity-10 transition-opacity">
-                                                <svg className="w-20 h-20 text-[#0066CC]" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" /></svg>
                                             </div>
-                                            <h3 className="text-[11px] font-black text-[#1A2B3D] uppercase tracking-widest mb-4 flex items-center gap-2 relative z-10">
-                                                <div className="w-2 h-2 rounded-full bg-[#0066CC]" />
-                                                Velocity: Time-to-Hire
-                                            </h3>
-                                            <div className="flex items-end gap-3 relative z-10">
-                                                <p className="text-4xl font-black text-[#1A2B3D] tracking-tighter">
-                                                    {stats?.velocity?.average_time_to_hire_days || 0}
-                                                </p>
-                                                <div className="space-y-0.5 pb-0.5">
-                                                    <p className="text-[12px] font-bold text-gray-500">Days on average</p>
-                                                    <p className="text-[9px] font-black text-[#0066CC] uppercase tracking-widest bg-blue-50 px-2 py-0.5 rounded inline-block">From App to Offer</p>
+                                            <div className="flex items-center gap-3">
+                                                <div className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
+                                                    <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                                                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Live Trend</span>
                                                 </div>
+                                                <select className="bg-white border text-[10px] font-black uppercase tracking-widest text-gray-500 border-gray-200 rounded-xl px-4 py-2 outline-none cursor-pointer hover:border-[#1F7A6E] transition-all appearance-none shadow-sm">
+                                                    <option>Yearly</option>
+                                                    <option>Monthly</option>
+                                                </select>
                                             </div>
                                         </div>
 
-                                        {/* Candidate Sources */}
-                                        <div className="bg-white p-6 rounded-[32px] border border-gray-100 shadow-sm flex-1">
-                                            <h3 className="text-[11px] font-black text-[#1A2B3D] uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                <div className="w-2 h-2 rounded-full bg-[#9B51E0]" />
-                                                Candidate Sources
-                                            </h3>
-                                            <div className="space-y-3">
-                                                {stats?.sources?.map((src: any, i: number) => {
-                                                    const total = stats?.funnel?.applied || 1; // Prevent div by zero
-                                                    const pct = Math.round((src.count / total) * 100);
+                                        {/* ── Chart body (relative container) ── */}
+                                        <div className="relative" style={{ height: 200 }}>
+
+                                            {/* Y-axis floating labels + ultra-pale dashed horizontals — NO cage/border lines */}
+                                            <div className="absolute inset-0 pointer-events-none" style={{ paddingLeft: 36, paddingBottom: 24, paddingTop: 4 }}>
+                                                {[100, 80, 60, 40, 20, 0].map((v) => {
+                                                    const topPct = ((100 - v) / 100) * 100;
                                                     return (
-                                                        <div key={i} className="flex items-center gap-3 group">
-                                                            <div className="w-8 h-8 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-sm shadow-sm group-hover:border-[#9B51E0] transition-colors shrink-0">
-                                                                {src.source === 'LinkedIn' ? (
-                                                                    <svg className="w-4 h-4 text-[#0077B5]" fill="currentColor" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z" /></svg>
-                                                                ) : src.source === 'Website' ? (
-                                                                    <svg className="w-4 h-4 text-[#1A2B3D]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 019-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>
-                                                                ) : src.source === 'Referral' ? (
-                                                                    <svg className="w-4 h-4 text-[#1F7A6E]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-                                                                ) : (
-                                                                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" /></svg>
-                                                                )}
-                                                            </div>
-                                                            <div className="flex-1">
-                                                                <div className="flex justify-between items-end mb-1">
-                                                                    <p className="text-[11px] font-bold text-[#1A2B3D]">{src.source || 'Direct Applied'}</p>
-                                                                    <p className="text-[9px] font-black text-gray-400">{src.count} ({pct}%)</p>
-                                                                </div>
-                                                                <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden">
-                                                                    <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} className="h-full bg-[#9B51E0] rounded-full" />
-                                                                </div>
-                                                            </div>
+                                                        <div
+                                                            key={v}
+                                                            className="absolute left-0 right-0 flex items-center"
+                                                            style={{ top: `${topPct}%` }}
+                                                        >
+                                                            <span className="text-[10px] text-gray-200 font-semibold w-8 text-right select-none pr-2 shrink-0 leading-none">{v}</span>
+                                                            {v > 0 && <div className="flex-1 border-t border-dashed" style={{ borderColor: 'rgba(0,0,0,0.045)' }} />}
                                                         </div>
                                                     );
                                                 })}
-                                                {(!stats?.sources || stats.sources.length === 0) && (
-                                                    <p className="text-gray-400 italic text-xs text-center py-4">No sourcing data available.</p>
-                                                )}
+                                            </div>
+
+                                            {/* SVG — no viewBox outline, no axes strokes */}
+                                            <svg
+                                                className="absolute inset-0 w-full h-full overflow-visible"
+                                                style={{ paddingLeft: 36, paddingBottom: 24, paddingTop: 4, paddingRight: 4 }}
+                                                viewBox="0 0 400 160"
+                                                preserveAspectRatio="none"
+                                                onMouseLeave={() => setHoveredPoint(null)}
+                                                onMouseMove={(e) => {
+                                                    if (!stats?.turnover?.length) return;
+                                                    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+                                                    const relX = (e.clientX - rect.left) / rect.width;
+                                                    const n = stats.turnover.length;
+                                                    setHoveredPoint(Math.max(0, Math.min(n - 1, Math.round(relX * (n - 1)))));
+                                                }}
+                                            >
+                                                <defs>
+                                                    {/* 3-stop airy gradient: 30% → 5% → 0% — light and modern */}
+                                                    <linearGradient id="toGrad2" x1="0" y1="0" x2="0" y2="1">
+                                                        <stop offset="0%" stopColor="#1F7A6E" stopOpacity="0.30" />
+                                                        <stop offset="60%" stopColor="#1F7A6E" stopOpacity="0.06" />
+                                                        <stop offset="100%" stopColor="#1F7A6E" stopOpacity="0.00" />
+                                                    </linearGradient>
+                                                </defs>
+
+                                                {(() => {
+                                                    if (!stats?.turnover || stats.turnover.length < 2) return null;
+                                                    const W = 400, H = 160, pad = 6;
+                                                    const n = stats.turnover.length;
+
+                                                    // Map each data point to SVG coords (rate 0-20 → full height)
+                                                    const pts: { x: number; y: number }[] = stats.turnover.map((d: any, i: number) => ({
+                                                        x: pad + (i / (n - 1)) * (W - pad * 2),
+                                                        y: pad + ((20 - Math.min(d.rate ?? 0, 20)) / 20) * (H - pad * 2)
+                                                    }));
+
+                                                    // Catmull-Rom spline → cubic Bézier (gives true smooth curves, no sharp peaks)
+                                                    function splinePath(pts: { x: number; y: number }[]): string {
+                                                        let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+                                                        for (let i = 0; i < pts.length - 1; i++) {
+                                                            const p0 = pts[Math.max(i - 1, 0)];
+                                                            const p1 = pts[i];
+                                                            const p2 = pts[i + 1];
+                                                            const p3 = pts[Math.min(i + 2, pts.length - 1)];
+                                                            // Standard Catmull-Rom tension = 1/6
+                                                            const cp1x = p1.x + (p2.x - p0.x) / 6;
+                                                            const cp1y = p1.y + (p2.y - p0.y) / 6;
+                                                            const cp2x = p2.x - (p3.x - p1.x) / 6;
+                                                            const cp2y = p2.y - (p3.y - p1.y) / 6;
+                                                            d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+                                                        }
+                                                        return d;
+                                                    }
+
+                                                    const linePath = splinePath(pts);
+                                                    const areaPath = `${linePath} L ${pts[n - 1].x} ${H} L ${pts[0].x} ${H} Z`;
+
+                                                    const hp = hoveredPoint;
+                                                    const hx = hp !== null ? pts[hp]?.x : null;
+                                                    const hy = hp !== null ? pts[hp]?.y : null;
+
+                                                    return (
+                                                        <>
+                                                            {/* 1. Area fill — airy gradient, no solid block */}
+                                                            <path d={areaPath} fill="url(#toGrad2)" />
+
+                                                            {/* 2. Catmull-Rom spline trend line */}
+                                                            <path
+                                                                d={linePath}
+                                                                fill="none"
+                                                                stroke="#1F7A6E"
+                                                                strokeWidth="3"
+                                                                strokeLinecap="round"
+                                                                strokeLinejoin="round"
+                                                            />
+
+                                                            {/* 3. Dynamic crosshair — vertical dashed line that follows the mouse */}
+                                                            {hx !== null && (
+                                                                <line
+                                                                    x1={hx} y1={pad}
+                                                                    x2={hx} y2={H - pad}
+                                                                    stroke="#1F7A6E"
+                                                                    strokeWidth="1.5"
+                                                                    strokeDasharray="5 4"
+                                                                    strokeOpacity="0.28"
+                                                                />
+                                                            )}
+
+                                                            {/* 4. Active point: outer glow → mid ring → solid dot */}
+                                                            {hx !== null && hy !== null && (
+                                                                <g>
+                                                                    <circle cx={hx} cy={hy} r="12" fill="rgba(31,122,110,0.07)" />
+                                                                    <circle cx={hx} cy={hy} r="7" fill="rgba(31,122,110,0.14)" />
+                                                                    <circle cx={hx} cy={hy} r="4" fill="#1A2B3D" stroke="white" strokeWidth="2.5" />
+                                                                </g>
+                                                            )}
+
+                                                            {/* Full invisible hit rect to ensure onMouseMove fires everywhere */}
+                                                            <rect x={0} y={0} width={W} height={H} fill="transparent" />
+                                                        </>
+                                                    );
+                                                })()}
+                                            </svg>
+
+                                            {/* High-contrast black tooltip — white text on dark bg, appears near active point */}
+                                            <AnimatePresence>
+                                                {hoveredPoint !== null && stats?.turnover?.[hoveredPoint] && (() => {
+                                                    const d = stats.turnover[hoveredPoint];
+                                                    const n = stats.turnover.length;
+                                                    const leftPct = (hoveredPoint / (n - 1)) * 100;
+                                                    const isRight = hoveredPoint >= n * 0.7;
+                                                    return (
+                                                        <motion.div
+                                                            key={hoveredPoint}
+                                                            initial={{ opacity: 0, scale: 0.88, y: 6 }}
+                                                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                                                            exit={{ opacity: 0, scale: 0.88 }}
+                                                            transition={{ duration: 0.12 }}
+                                                            style={{
+                                                                position: 'absolute',
+                                                                top: 8,
+                                                                ...(isRight
+                                                                    ? { right: `calc(${100 - leftPct}% + 10px)` }
+                                                                    : { left: `calc(${leftPct}% + 48px)` }),
+                                                                zIndex: 60,
+                                                            }}
+                                                            className="bg-[#0F1C28] pointer-events-none text-white px-4 py-3 rounded-2xl shadow-2xl border border-white/10 min-w-[120px]"
+                                                        >
+                                                            <div className="flex items-center gap-1.5 mb-1">
+                                                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                                                                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-emerald-400">Portfolio</p>
+                                                            </div>
+                                                            <p className="text-[18px] font-black leading-none">{d.rate}%</p>
+                                                            <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mt-1">{d.label} 2024</p>
+                                                        </motion.div>
+                                                    );
+                                                })()}
+                                            </AnimatePresence>
+                                        </div>
+
+                                        {/* X-axis: floating month labels — no axis line, label scales on hover */}
+                                        <div className="flex mt-3" style={{ paddingLeft: 36, paddingRight: 4 }}>
+                                            {(stats?.turnover || []).map((t: any, i: number) => (
+                                                <span
+                                                    key={i}
+                                                    style={{ flex: 1 }}
+                                                    className={`text-center text-[9px] font-bold uppercase tracking-widest select-none transition-all ${hoveredPoint === i ? 'text-[#1F7A6E] font-black' : 'text-gray-300'}`}
+                                                >
+                                                    {t.label}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Hiring Funnel Overview — Pro SVG Bézier Funnel */}
+                                    <div className="bg-white p-8 rounded-[24px] border border-gray-100 shadow-sm flex flex-col hover:shadow-md transition-all duration-300">
+
+                                        {/* Header */}
+                                        <div className="flex justify-between items-start mb-6">
+                                            <div>
+                                                <h3 className="text-[18px] font-black text-[#1A2B3D] tracking-tight">Hiring Funnel Overview</h3>
+                                                <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-1">Candidate pipeline · {new Date().getFullYear()}</p>
+                                            </div>
+                                            <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6]" />
+                                                <div className="w-1.5 h-1.5 rounded-full bg-[#60A5FA]" />
+                                                <div className="w-1.5 h-1.5 rounded-full bg-[#2DD4BF]" />
+                                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Flow</span>
                                             </div>
                                         </div>
 
+                                        {/* KPI row */}
+                                        {(() => {
+                                            const stages = [
+                                                { label: 'Applied', count: stats?.funnel?.applied || 0, color: '#8B5CF6' },
+                                                { label: 'Shortlisted', count: stats?.funnel?.shortlisted || 0, color: '#60A5FA' },
+                                                { label: 'Interviewed', count: stats?.funnel?.interview || 0, color: '#38BDF8' },
+                                                { label: 'Offered', count: stats?.funnel?.offer || 0, color: '#2DD4BF' },
+                                            ];
+                                            const max = Math.max(...stages.map(s => s.count), 1);
+
+                                            // SVG constants
+                                            const W = 400, H = 130, padX = 0;
+                                            const n = stages.length;
+                                            const segW = (W - padX * 2) / n;
+
+                                            // Compute y-coords per edge (top & bottom) for each segment boundary
+                                            // height of each stage proportional to its count relative to max
+                                            const halfHeights = stages.map(s => {
+                                                const ratio = s.count / max;
+                                                const minH = 0.18; // keep thin stages visible
+                                                return ((minH + (1 - minH) * ratio) * H) / 2;
+                                            });
+                                            const cy = H / 2;
+
+                                            // x positions for each stage boundary (n+1 edges)
+                                            const xs = Array.from({ length: n + 1 }, (_, i) => padX + i * segW);
+
+                                            // top / bottom y at each boundary (average of adjacent stages)
+                                            const topYs = xs.map((_, xi) => {
+                                                if (xi === 0) return cy - halfHeights[0];
+                                                if (xi === n) return cy - halfHeights[n - 1];
+                                                return cy - (halfHeights[xi - 1] + halfHeights[xi]) / 2;
+                                            });
+                                            const botYs = xs.map((_, xi) => {
+                                                if (xi === 0) return cy + halfHeights[0];
+                                                if (xi === n) return cy + halfHeights[n - 1];
+                                                return cy + (halfHeights[xi - 1] + halfHeights[xi]) / 2;
+                                            });
+
+                                            // Build a smooth path per segment using cubic Bézier
+                                            function segPath(i: number) {
+                                                const x0 = xs[i], x1 = xs[i + 1];
+                                                const cpX = (x0 + x1) / 2;
+                                                // Top edge: left-to-right
+                                                const topEdge = `M ${x0} ${topYs[i]} C ${cpX} ${topYs[i]}, ${cpX} ${topYs[i + 1]}, ${x1} ${topYs[i + 1]}`;
+                                                // Bottom edge: right-to-left to close
+                                                const botEdge = `L ${x1} ${botYs[i + 1]} C ${cpX} ${botYs[i + 1]}, ${cpX} ${botYs[i]}, ${x0} ${botYs[i]} Z`;
+                                                return `${topEdge} ${botEdge}`;
+                                            }
+
+                                            // Full gradient outline path (top spine left→right, bot spine right→left)
+                                            const topSpine = `M ${xs[0]} ${topYs[0]} ` +
+                                                xs.slice(1).map((x, i) => {
+                                                    const cpX = (xs[i] + x) / 2;
+                                                    return `C ${cpX} ${topYs[i]}, ${cpX} ${topYs[i + 1]}, ${x} ${topYs[i + 1]}`;
+                                                }).join(' ');
+                                            const botSpine = xs.slice().reverse().map((x, ri) => {
+                                                const i = n - ri;
+                                                if (ri === 0) return `L ${x} ${botYs[i]}`;
+                                                const cpX = (xs[i] + xs[i - 1]) / 2;
+                                                return `C ${cpX} ${botYs[i]}, ${cpX} ${botYs[i - 1]}, ${xs[i - 1]} ${botYs[i - 1]}`;
+                                            }).join(' ');
+                                            const fullPath = `${topSpine} ${botSpine} Z`;
+
+                                            return (
+                                                <>
+                                                    {/* Stage KPI numbers */}
+                                                    <div className="flex justify-between mb-5 px-1">
+                                                        {stages.map((s, i) => (
+                                                            <div key={i} className="flex flex-col items-center gap-0.5" style={{ flex: 1 }}>
+                                                                <p className="text-[22px] font-black tracking-tighter" style={{ color: s.color }}>{s.count.toLocaleString()}</p>
+                                                                <p className="text-[9px] font-black text-gray-300 uppercase tracking-widest">{s.label}</p>
+                                                                {i > 0 && (
+                                                                    <p className="text-[8px] font-black text-gray-200 mt-0.5">
+                                                                        {stages[i - 1].count > 0
+                                                                            ? Math.round((s.count / stages[i - 1].count) * 100)
+                                                                            : 0}% conv.
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* SVG Bézier Funnel */}
+                                                    <div className="relative w-full" style={{ height: H }}>
+                                                        <svg
+                                                            viewBox={`0 0 ${W} ${H}`}
+                                                            className="w-full h-full"
+                                                            preserveAspectRatio="none"
+                                                        >
+                                                            <defs>
+                                                                {/* Purple → teal gradient across full width */}
+                                                                <linearGradient id="funnelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                                                    <stop offset="0%" stopColor="#8B5CF6" stopOpacity="0.85" />
+                                                                    <stop offset="35%" stopColor="#60A5FA" stopOpacity="0.85" />
+                                                                    <stop offset="70%" stopColor="#38BDF8" stopOpacity="0.85" />
+                                                                    <stop offset="100%" stopColor="#2DD4BF" stopOpacity="0.85" />
+                                                                </linearGradient>
+                                                                {/* Lighter version for per-segment hover */}
+                                                                {stages.map((s, i) => (
+                                                                    <linearGradient key={i} id={`segGrad${i}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                                                                        <stop offset="0%" stopColor={s.color} stopOpacity="0.95" />
+                                                                        <stop offset="100%" stopColor={stages[Math.min(i + 1, n - 1)].color} stopOpacity="0.95" />
+                                                                    </linearGradient>
+                                                                ))}
+                                                                {/* Gloss overlay */}
+                                                                <linearGradient id="funnelGloss" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                                    <stop offset="0%" stopColor="white" stopOpacity="0.20" />
+                                                                    <stop offset="50%" stopColor="white" stopOpacity="0.04" />
+                                                                    <stop offset="100%" stopColor="white" stopOpacity="0.12" />
+                                                                </linearGradient>
+                                                            </defs>
+
+                                                            {/* 1. Main filled funnel shape with gradient */}
+                                                            <path d={fullPath} fill="url(#funnelGrad)" />
+
+                                                            {/* 2. Gloss layer on top */}
+                                                            <path d={fullPath} fill="url(#funnelGloss)" />
+
+                                                            {/* 3. Per-segment paths (slightly lighter on hover via opacity) */}
+                                                            {stages.map((_, i) => (
+                                                                <path
+                                                                    key={i}
+                                                                    d={segPath(i)}
+                                                                    fill="transparent"
+                                                                    stroke="white"
+                                                                    strokeOpacity="0.15"
+                                                                    strokeWidth="1.5"
+                                                                    className="transition-opacity cursor-pointer hover:stroke-opacity-40"
+                                                                />
+                                                            ))}
+
+                                                            {/* 4. Glassmorphic vertical dividers at each boundary */}
+                                                            {xs.slice(1, -1).map((x, i) => (
+                                                                <line
+                                                                    key={i}
+                                                                    x1={x} y1={topYs[i + 1]}
+                                                                    x2={x} y2={botYs[i + 1]}
+                                                                    stroke="white"
+                                                                    strokeOpacity="0.25"
+                                                                    strokeWidth="1.5"
+                                                                    strokeDasharray="2 3"
+                                                                />
+                                                            ))}
+
+                                                            {/* 5. Subtle flow particles */}
+                                                            {[0.18, 0.45, 0.72].map((frac, i) => (
+                                                                <circle
+                                                                    key={i}
+                                                                    cx={W * frac}
+                                                                    cy={cy + (i % 2 === 0 ? -8 : 8)}
+                                                                    r={i === 1 ? 3 : 2}
+                                                                    fill="white"
+                                                                    fillOpacity="0.3"
+                                                                    className={i === 0 ? 'animate-ping' : i === 1 ? 'animate-pulse' : 'animate-bounce'}
+                                                                />
+                                                            ))}
+                                                        </svg>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                                {/* Detailed Table Layer (Bottom): Granular Candidate Info */}
+                                <div className="space-y-8">
+                                    {/* Recent Applications Table - Full Width */}
+                                    <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm overflow-hidden flex flex-col hover:shadow-md transition-all duration-300">
+                                        <div className="p-8 border-b border-gray-50 flex justify-between items-center bg-gray-50/10">
+                                            <h3 className="text-[17px] font-black text-[#1A2B3D]">Recent Applications</h3>
+                                            <div className="flex gap-4">
+                                                <button className="text-[10px] font-black uppercase text-gray-400 hover:text-[#1F7A6E] transition-colors flex items-center gap-1.5 bg-white border border-gray-100 px-4 py-2 rounded-xl shadow-sm">
+                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M3 4.5h14.25M3 9h9.75M3 13.5h9.75m4.5-4.5v12m0 0l-3.75-3.75M17.25 21L21 17.25" /></svg>
+                                                    Filter
+                                                </button>
+                                                <button className="text-[10px] font-black uppercase text-gray-400 hover:text-[#1F7A6E] transition-colors flex items-center gap-1.5 bg-white border border-gray-100 px-4 py-2 rounded-xl shadow-sm">
+                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                                    Export
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="overflow-x-auto flex-1">
+                                            <table className="w-full text-left">
+                                                <thead>
+                                                    <tr className="bg-gray-50/30">
+                                                        <th className="px-8 py-5 text-[10px] uppercase font-black text-gray-300 tracking-[0.15em]">Candidate Profile</th>
+                                                        <th className="px-8 py-5 text-[10px] uppercase font-black text-gray-300 tracking-[0.15em]">Position Applied</th>
+                                                        <th className="px-8 py-5 text-[10px] uppercase font-black text-gray-300 tracking-[0.15em]">Date Applied</th>
+                                                        <th className="px-8 py-5 text-[10px] uppercase font-black text-gray-300 tracking-[0.15em]">Current Status</th>
+                                                        <th className="px-8 py-5 text-[10px] uppercase font-black text-gray-300 tracking-[0.15em]">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-50/50">
+                                                    {(stats?.raw_data || []).slice(0, 8).map((app: any) => (
+                                                        <tr key={app.id} className="hover:bg-gray-50/40 transition-colors group cursor-pointer" onClick={() => setDrawerApp(app)}>
+                                                            <td className="px-8 py-5">
+                                                                <div className="flex items-center gap-4">
+                                                                    <div className="w-10 h-10 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-black text-xs uppercase shadow-sm">
+                                                                        {app.name.charAt(0)}
+                                                                    </div>
+                                                                    <div>
+                                                                        <p className="text-[14px] font-black text-[#1A2B3D] group-hover:text-[#1F7A6E] transition-colors">{app.name}</p>
+                                                                        <p className="text-[11px] font-black text-gray-300 uppercase tracking-tight">{app.email}</p>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-8 py-5 text-[13px] font-black text-gray-600">{app.job_title}</td>
+                                                            <td className="px-8 py-5 text-[13px] font-black text-gray-400 capitalize">{new Date(app.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                                                            <td className="px-8 py-5">
+                                                                <span className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 w-fit ${app.status === 'hired' ? 'bg-emerald-50 text-emerald-600' :
+                                                                    app.status === 'rejected' ? 'bg-red-50 text-red-600' :
+                                                                        app.status === 'interview' ? 'bg-amber-50 text-amber-600' :
+                                                                            app.status === 'offer' ? 'bg-indigo-50 text-indigo-600' :
+                                                                                'bg-gray-100 text-gray-500'
+                                                                    }`}>
+                                                                    <div className={`w-1.5 h-1.5 rounded-full ${app.status === 'hired' ? 'bg-emerald-500' : app.status === 'rejected' ? 'bg-red-500' : 'bg-current opacity-40'}`} />
+                                                                    {app.status}
+                                                                </span>
+                                                            </td>
+                                                            <td className="px-8 py-5">
+                                                                <button className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center hover:bg-[#1F7A6E] hover:text-white">
+                                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                    {(!stats?.raw_data || stats.raw_data.length === 0) && (
+                                                        <tr>
+                                                            <td colSpan={5} className="px-8 py-20 text-center text-xs font-black text-gray-300 uppercase tracking-[0.2em]">No recent applications found</td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    {/* Candidate Sources - Integrated as a secondary Bento row */}
+                                    <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-8 flex flex-col hover:shadow-md transition-all duration-300">
+                                        <div className="flex justify-between items-center mb-8">
+                                            <div>
+                                                <h3 className="text-[17px] font-black text-[#1A2B3D]">Candidate Sources</h3>
+                                                <p className="text-[11px] font-black text-gray-300 uppercase mt-1 tracking-widest">Efficiency by channel</p>
+                                            </div>
+                                            <button
+                                                onClick={() => setAddCandidateModal(true)}
+                                                className="bg-emerald-50 text-[#1F7A6E] px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-[#1F7A6E] hover:text-white transition-all shadow-sm shadow-emerald-100/50 flex items-center gap-2"
+                                            >
+                                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>
+                                                Add Manually
+                                            </button>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-8">
+                                            {stats?.sources?.slice(0, 6).map((src: any, i: number) => {
+                                                const total = stats?.funnel?.applied || 1;
+                                                const pct = Math.round((src.count / total) * 100);
+                                                return (
+                                                    <div key={i} className="bg-gray-50/30 p-5 rounded-2xl border border-gray-100/50 group/item hover:bg-white hover:border-emerald-100 transition-all">
+                                                        <div className="flex justify-between items-start mb-4">
+                                                            <div className={`w-8 h-8 rounded-lg ${i === 0 ? 'bg-indigo-50 text-indigo-500' : i === 1 ? 'bg-amber-50 text-amber-500' : 'bg-white text-gray-300'} border border-gray-100 flex items-center justify-center font-black text-[10px]`}>
+                                                                {i + 1}
+                                                            </div>
+                                                            <p className="text-[14px] font-black text-[#1A2B3D] tracking-tighter">{pct}%</p>
+                                                        </div>
+                                                        <p className="text-[11px] font-black text-gray-400 mb-3 uppercase tracking-widest">{src.source || 'Direct'}</p>
+                                                        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                            <div className={`h-full ${i === 0 ? 'bg-indigo-400' : i === 1 ? 'bg-amber-400' : 'bg-emerald-400'} rounded-full transition-all duration-1000`} style={{ width: `${pct}%` }} />
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                        )} {/* end statsLoading ternary */}
-                    </div>
+                        )
+                        } {/* end statsLoading ternary */}
+                    </div >
                 )
             }
 
@@ -1292,7 +1947,7 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                                         <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Description & Justification</h3>
                                         {drawerReq.jd_path && (
                                             <a
-                                                href={`${API_URL.replace('/api', '/storage')}/${drawerReq.jd_path}`}
+                                                href={`${API_URL}/v1/requisitions/${drawerReq.id}/jd?token=${typeof window !== 'undefined' ? localStorage.getItem('auth_token') : ''}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex items-center gap-2 text-[10px] font-black text-[#1F7A6E] hover:underline uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-lg transition-all"
@@ -1348,6 +2003,95 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                             </div>
                         </motion.div>
                     </>
+                )}
+            </AnimatePresence>
+
+            {/* Manually Add Candidate Modal */}
+            <AnimatePresence>
+                {addCandidateModal && (
+                    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setAddCandidateModal(false)} className="absolute inset-0 bg-[#1A2B3D]/40 backdrop-blur-sm" />
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+                            className="bg-white rounded-[32px] shadow-2xl w-full max-w-lg overflow-hidden relative z-10 border border-gray-100 flex flex-col max-h-[90vh]"
+                        >
+                            <div className="bg-[#F9FAFB] p-8 border-b border-gray-100 relative">
+                                <div className="absolute top-0 right-0 p-8 opacity-5">
+                                    <svg className="w-16 h-16 text-[#1A2B3D]" fill="currentColor" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z" /></svg>
+                                </div>
+                                <h2 className="text-2xl font-black text-[#1A2B3D] flex items-center gap-3 relative z-10">
+                                    <div className="w-2 h-8 bg-[#1F7A6E] rounded-full" />
+                                    MANUAL SOURCING
+                                </h2>
+                                <p className="text-sm font-medium text-gray-500 mt-2 relative z-10">
+                                    Directly add an applicant to the pipeline. Their source will be accurately tracked in reporting.
+                                </p>
+                            </div>
+                            <div className="p-8 overflow-y-auto">
+                                <form id="add-candidate-form" onSubmit={handleAddCandidate} className="space-y-6">
+                                    <div className="grid grid-cols-1 gap-6">
+                                        <div className="space-y-1.5">
+                                            <label className="text-[11px] font-black text-gray-400 uppercase tracking-widest ml-1">Candidate Name <span className="text-red-500">*</span></label>
+                                            <input required type="text" value={candidateForm.name} onChange={e => setCandidateForm({ ...candidateForm, name: e.target.value })} className="w-full bg-white border border-gray-200 text-sm font-bold text-[#1A2B3D] rounded-xl px-4 py-3.5 focus:outline-none focus:border-[#1F7A6E] focus:ring-1 focus:ring-[#1F7A6E]" placeholder="ex. John Doe" />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[11px] font-black text-gray-400 uppercase tracking-widest ml-1">Email <span className="text-red-500">*</span></label>
+                                            <input required type="email" value={candidateForm.email} onChange={e => setCandidateForm({ ...candidateForm, email: e.target.value })} className="w-full bg-white border border-gray-200 text-sm font-bold text-[#1A2B3D] rounded-xl px-4 py-3.5 focus:outline-none focus:border-[#1F7A6E] focus:ring-1 focus:ring-[#1F7A6E]" placeholder="john@example.com" />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[11px] font-black text-gray-400 uppercase tracking-widest ml-1">Phone</label>
+                                            <input type="tel" value={candidateForm.phone} onChange={e => setCandidateForm({ ...candidateForm, phone: e.target.value })} className="w-full bg-white border border-gray-200 text-sm font-bold text-[#1A2B3D] rounded-xl px-4 py-3.5 focus:outline-none focus:border-[#1F7A6E] focus:ring-1 focus:ring-[#1F7A6E]" placeholder="+251 9..." />
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            <label className="text-[11px] font-black text-gray-400 uppercase tracking-widest ml-1">Target Job / Open Role <span className="text-red-500">*</span></label>
+                                            <select required value={candidateForm.job_posting_id} onChange={e => setCandidateForm({ ...candidateForm, job_posting_id: e.target.value })} className="w-full bg-white border border-gray-200 text-sm font-bold text-[#1A2B3D] rounded-xl px-4 py-3.5 focus:outline-none focus:border-[#1F7A6E] focus:ring-1 focus:ring-[#1F7A6E]">
+                                                <option value="" disabled>Select a target position...</option>
+                                                {(jobs || []).filter(j => j.status === 'active').map(j => (
+                                                    <option key={j.id} value={j.id}>{j.title} ({j.department})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            <label className="text-[11px] font-black text-[#9B51E0] uppercase tracking-widest ml-1">Sourcing Channel <span className="text-red-500">*</span></label>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                {['LinkedIn', 'Referral', 'Website', 'Job Fair', 'Direct Outsourcing', 'Other'].map(src => (
+                                                    <button
+                                                        type="button"
+                                                        key={src}
+                                                        onClick={() => setCandidateForm({ ...candidateForm, source: src })}
+                                                        className={`p-3 text-xs font-black uppercase tracking-widest rounded-xl border transition-all ${candidateForm.source === src ? 'bg-[#9B51E0]/10 border-[#9B51E0] text-[#9B51E0]' : 'bg-gray-50 border-gray-100 text-gray-400 hover:border-gray-200'
+                                                            }`}
+                                                    >
+                                                        {src}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                            <div className="p-8 bg-white border-t border-gray-100 flex gap-4 relative">
+                                {candidateSuccess && (
+                                    <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex items-center justify-center z-10 animate-in fade-in zoom-in duration-300">
+                                        <div className="flex flex-col items-center gap-3">
+                                            <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
+                                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+                                            </div>
+                                            <p className="text-sm font-black text-[#1A2B3D] uppercase tracking-widest">Candidate Added Successfully!</p>
+                                        </div>
+                                    </div>
+                                )}
+                                <button type="button" onClick={() => setAddCandidateModal(false)} className="px-6 py-4 flex-1 bg-gray-50 text-gray-500 rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-gray-100 transition-colors">
+                                    Cancel
+                                </button>
+                                <button type="submit" form="add-candidate-form" disabled={actionLoading || candidateSuccess || !candidateForm.name || !candidateForm.email || !candidateForm.job_posting_id} className="px-6 py-4 flex-[2] bg-[#1A2B3D] text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-[#1A2B3D]/90 disabled:opacity-50 transition-colors flex justify-center items-center shadow-lg shadow-[#1A2B3D]/20">
+                                    {actionLoading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'Confirm & Add to Pipeline'}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
                 )}
             </AnimatePresence>
 
@@ -1880,6 +2624,97 @@ export default function TADashboard({ user, activeTab: initialTab, onLogout }: {
                     </motion.div>
                 )}
             </AnimatePresence>
-        </div>
+
+            {/* Employee Status Modal */}
+            <AnimatePresence>
+                {employeeStatusModal && selectedEmployee && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#1A2B3D]/80 backdrop-blur-sm"
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.95, opacity: 0, y: 20 }}
+                            className="bg-white w-full max-w-xl rounded-[32px] overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                        >
+                            <div className="px-8 pt-8 pb-6 bg-[#F9FAFB] border-b border-gray-100 flex justify-between items-center shrink-0">
+                                <div className="space-y-1">
+                                    <h2 className="text-xl font-black text-[#1A2B3D] tracking-tight">MANAGE STATUS</h2>
+                                    <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Update employment for {selectedEmployee.name}</p>
+                                </div>
+                                <button onClick={() => setEmployeeStatusModal(false)} className="w-10 h-10 rounded-full bg-white border border-gray-100 flex items-center justify-center text-gray-400 hover:text-red-400 transition-colors">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                            </div>
+
+                            <div className="p-8 space-y-6 overflow-y-auto">
+                                <div className="grid grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">New Status</label>
+                                        <select
+                                            value={employeeStatusForm.status}
+                                            onChange={e => setEmployeeStatusForm({ ...employeeStatusForm, status: e.target.value })}
+                                            className="w-full px-4 py-3.5 rounded-2xl border-2 border-gray-100 focus:border-[#1F7A6E] focus:outline-none text-[#1A2B3D] font-bold text-sm transition-colors"
+                                        >
+                                            <option value="active">Active</option>
+                                            <option value="resigned">Resigned</option>
+                                            <option value="terminated">Terminated</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Date of Separation</label>
+                                        <input
+                                            type="date"
+                                            value={employeeStatusForm.date}
+                                            onChange={e => setEmployeeStatusForm({ ...employeeStatusForm, date: e.target.value })}
+                                            className="w-full px-4 py-3.5 rounded-2xl border-2 border-gray-100 focus:border-[#1F7A6E] focus:outline-none text-[#1A2B3D] font-bold text-sm transition-colors"
+                                            disabled={employeeStatusForm.status === 'active'}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Reason (Internal Note)</label>
+                                    <textarea
+                                        rows={4}
+                                        value={employeeStatusForm.reason}
+                                        onChange={e => setEmployeeStatusForm({ ...employeeStatusForm, reason: e.target.value })}
+                                        placeholder="Briefly describe the reason for separation..."
+                                        className="w-full px-4 py-3.5 rounded-2xl border-2 border-gray-100 focus:border-[#1F7A6E] focus:outline-none text-[#1A2B3D] font-bold text-sm transition-colors resize-none"
+                                        disabled={employeeStatusForm.status === 'active'}
+                                    />
+                                </div>
+
+                                {employeeStatusForm.status !== 'active' && (
+                                    <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 text-[12px] text-amber-600 font-medium flex gap-3">
+                                        <span className="text-base text-xl leading-none">⚠️</span>
+                                        <p>Warning: Marking an employee as {employeeStatusForm.status} will remove them from the active list and it will immediately affect the <strong>Employee Turnover Report</strong>.</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="px-8 pb-8 shrink-0 flex gap-4 pt-4 bg-white border-t border-gray-50">
+                                <button
+                                    onClick={() => setEmployeeStatusModal(false)}
+                                    className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-gray-200 transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleUpdateEmployeeStatus}
+                                    disabled={actionLoading}
+                                    className="flex-[2] py-4 bg-gradient-to-r from-[#1F7A6E] to-[#165C53] text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-[#1F7A6E]/30 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {actionLoading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mx-auto" /> : 'Confirm Status Update'}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div >
     );
 }
